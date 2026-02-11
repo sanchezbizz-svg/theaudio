@@ -18,8 +18,11 @@ def is_valid_tiktok_url(url: str) -> bool:
 # -----------------------------
 # AUDIO EXTRACTION → MP3
 # -----------------------------
-@app.route("/tiktok/mp3", methods=["POST"])
+@app.route("/tiktok/mp3", methods=["POST", "OPTIONS"])
 def tiktok_mp3():
+    if request.method == "OPTIONS":
+        return "", 200
+
     data = request.get_json(silent=True)
     if not data or "url" not in data:
         return jsonify({"error": "Missing url"}), 400
@@ -34,7 +37,7 @@ def tiktok_mp3():
     audio_path = os.path.join(temp_dir, "audio.mp3")
 
     try:
-        # 1️⃣ Télécharger la vidéo (méthode stable)
+        # 1️⃣ Télécharger la vidéo (stable)
         download_cmd = [
             sys.executable,
             "-m", "yt_dlp",
@@ -57,7 +60,7 @@ def tiktok_mp3():
         if not os.path.exists(video_path) or os.path.getsize(video_path) < 1024:
             return jsonify({"error": "Downloaded video is empty"}), 500
 
-        # 2️⃣ Extraire et ENCODER en MP3 (192 kbps)
+        # 2️⃣ Extraire et encoder en MP3 (192 kbps)
         ffmpeg_cmd = [
             "ffmpeg",
             "-y",
@@ -81,7 +84,9 @@ def tiktok_mp3():
                 "reason": "No audio track or ffmpeg error"
             }), 409
 
-        # 3️⃣ Streaming MP3 (safe avec Gunicorn)
+        # 3️⃣ Streaming MP3 AVEC Content-Length
+        mp3_size = os.path.getsize(audio_path)
+
         def generate():
             with open(audio_path, "rb") as f:
                 while True:
@@ -95,6 +100,7 @@ def tiktok_mp3():
             content_type="audio/mpeg",
             headers={
                 "Content-Disposition": "attachment; filename=tiktok_audio.mp3",
+                "Content-Length": str(mp3_size),  # ✅ essentiel pour la progression
                 "Cache-Control": "no-store",
                 "Accept-Ranges": "none",
             },
@@ -120,11 +126,13 @@ def health():
 
 
 # -----------------------------
-# Run (local)
+# Run
 # -----------------------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port, threaded=True)
+
+
 
 
 

@@ -31,86 +31,79 @@ def tiktok_mp3():
     if not is_valid_tiktok_url(url):
         return jsonify({"error": "Invalid TikTok URL"}), 400
 
-    # Dossier temporaire isolé (/tmp sur Fly.io)
     temp_dir = tempfile.mkdtemp(prefix="tiktok_mp3_")
     video_path = os.path.join(temp_dir, "video.mp4")
     audio_path = os.path.join(temp_dir, "audio.mp3")
 
     try:
-        # 1️⃣ Télécharger la vidéo (stable)
-        download_cmd = [
-            sys.executable,
-            "-m", "yt_dlp",
-            "-f", "bv*+ba/b",
-            "--merge-output-format", "mp4",
-            "--no-part",
-            "--no-playlist",
-            "--quiet",
-            "-o", video_path,
-            url,
-        ]
-
+        # 1️⃣ Télécharger la vidéo
         subprocess.run(
-            download_cmd,
+            [
+                sys.executable, "-m", "yt_dlp",
+                "-f", "bv*+ba/b",
+                "--merge-output-format", "mp4",
+                "--no-part",
+                "--no-playlist",
+                "--quiet",
+                "-o", video_path,
+                url,
+            ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             check=True,
         )
 
-        if not os.path.exists(video_path) or os.path.getsize(video_path) < 1024:
-            return jsonify({"error": "Downloaded video is empty"}), 500
-
-        # 2️⃣ Extraire et encoder en MP3 (192 kbps)
-        ffmpeg_cmd = [
-            "ffmpeg",
-            "-y",
-            "-i", video_path,
-            "-vn",
-            "-acodec", "libmp3lame",
-            "-ab", "192k",
-            audio_path,
-        ]
-
+        # 2️⃣ Extraire MP3
         subprocess.run(
-            ffmpeg_cmd,
+            [
+                "ffmpeg", "-y",
+                "-i", video_path,
+                "-vn",
+                "-acodec", "libmp3lame",
+                "-ab", "192k",
+                audio_path,
+            ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             check=True,
         )
 
         if not os.path.exists(audio_path) or os.path.getsize(audio_path) < 1024:
-            return jsonify({
-                "error": "MP3 extraction failed",
-                "reason": "No audio track or ffmpeg error"
-            }), 409
+            return jsonify({"error": "MP3 extraction failed"}), 409
 
-        # 3️⃣ Streaming MP3 AVEC Content-Length
         mp3_size = os.path.getsize(audio_path)
 
+        # ✅ Nettoyage APRÈS streaming
         def generate():
-            with open(audio_path, "rb") as f:
-                while True:
-                    chunk = f.read(8192)
-                    if not chunk:
-                        break
-                    yield chunk
+            try:
+                with open(audio_path, "rb") as f:
+                    while True:
+                        chunk = f.read(8192)
+                        if not chunk:
+                            break
+                        yield chunk
+            finally:
+                # 🔥 C'EST ICI qu'on nettoie
+                shutil.rmtree(temp_dir, ignore_errors=True)
 
         return Response(
             stream_with_context(generate()),
             content_type="audio/mpeg",
             headers={
                 "Content-Disposition": "attachment; filename=tiktok_audio.mp3",
-                "Content-Length": str(mp3_size),  # ✅ essentiel pour la progression
+                "Content-Length": str(mp3_size),
                 "Cache-Control": "no-store",
                 "Accept-Ranges": "none",
             },
         )
 
     except subprocess.CalledProcessError as e:
+        shutil.rmtree(temp_dir, ignore_errors=True)
         return jsonify({
-            "error": "Video download or MP3 encoding failed",
+            "error": "Processing failed",
             "details": e.stderr.decode(errors="ignore"),
         }), 500
+
 
     finally:
         # 4️⃣ Nettoyage GARANTI
@@ -131,6 +124,7 @@ def health():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port, threaded=True)
+
 
 
 

@@ -31,6 +31,7 @@ def tiktok_mp3():
     if not is_valid_tiktok_url(url):
         return jsonify({"error": "Invalid TikTok URL"}), 400
 
+    # 📂 Dossier temporaire (/tmp sur Fly.io)
     temp_dir = tempfile.mkdtemp(prefix="tiktok_mp3_")
     video_path = os.path.join(temp_dir, "video.mp4")
     audio_path = os.path.join(temp_dir, "audio.mp3")
@@ -39,7 +40,8 @@ def tiktok_mp3():
         # 1️⃣ Télécharger la vidéo
         subprocess.run(
             [
-                sys.executable, "-m", "yt_dlp",
+                sys.executable,
+                "-m", "yt_dlp",
                 "-f", "bv*+ba/b",
                 "--merge-output-format", "mp4",
                 "--no-part",
@@ -53,10 +55,15 @@ def tiktok_mp3():
             check=True,
         )
 
-        # 2️⃣ Extraire MP3
+        if not os.path.exists(video_path) or os.path.getsize(video_path) < 1024:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            return jsonify({"error": "Downloaded video is empty"}), 500
+
+        # 2️⃣ Extraire et encoder en MP3
         subprocess.run(
             [
-                "ffmpeg", "-y",
+                "ffmpeg",
+                "-y",
                 "-i", video_path,
                 "-vn",
                 "-acodec", "libmp3lame",
@@ -69,11 +76,16 @@ def tiktok_mp3():
         )
 
         if not os.path.exists(audio_path) or os.path.getsize(audio_path) < 1024:
-            return jsonify({"error": "MP3 extraction failed"}), 409
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            return jsonify({
+                "error": "MP3 extraction failed",
+                "reason": "No audio track or ffmpeg error"
+            }), 409
 
+        # 3️⃣ Taille MP3 (pour Content-Length)
         mp3_size = os.path.getsize(audio_path)
 
-        # ✅ Nettoyage APRÈS streaming
+        # 4️⃣ Streaming MP3 + nettoyage APRÈS envoi
         def generate():
             try:
                 with open(audio_path, "rb") as f:
@@ -83,7 +95,7 @@ def tiktok_mp3():
                             break
                         yield chunk
             finally:
-                # 🔥 C'EST ICI qu'on nettoie
+                # ✅ Nettoyage garanti après streaming
                 shutil.rmtree(temp_dir, ignore_errors=True)
 
         return Response(
@@ -100,14 +112,9 @@ def tiktok_mp3():
     except subprocess.CalledProcessError as e:
         shutil.rmtree(temp_dir, ignore_errors=True)
         return jsonify({
-            "error": "Processing failed",
+            "error": "Video download or MP3 encoding failed",
             "details": e.stderr.decode(errors="ignore"),
         }), 500
-
-
-    finally:
-        # 4️⃣ Nettoyage GARANTI
-        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 # -----------------------------
@@ -124,6 +131,8 @@ def health():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port, threaded=True)
+
+
 
 
 
